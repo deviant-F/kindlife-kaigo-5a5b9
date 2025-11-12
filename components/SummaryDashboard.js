@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
+import Image from 'next/image';
 
 // Dynamically import Chart.js components with SSR disabled
 const Doughnut = dynamic(
@@ -9,24 +10,16 @@ const Doughnut = dynamic(
   }
 );
 
-const beds = {
-  umebayashi: 27,
-  rokujyo: 31,
-  ogakishi: 30,
-  kanezawa: 34,
-  nigata: 29,
-  toyama: 40,
-  kusatsu: 44,
-  hikone: 33,
-  moriokanishi: 54,
-  morioka: 40,
-  tsushinmachi: 35,
-  toyamaokuda: 52,
-  fukushima: 37,
-};
-
-const SummaryDashboard = ({ data, locationMap }) => {
+const SummaryDashboard = ({ data, locationMap, basicHours }) => {
   const [isChartReady, setIsChartReady] = useState(false);
+
+  // Helper function to format value: show "-" in grey if 0, otherwise show the value
+  const formatValue = (value) => {
+    if (value === 0 || value === null || value === undefined) {
+      return <span className='text-gray-300'>―</span>;
+    }
+    return value;
+  };
 
   useEffect(() => {
     // Register Chart.js components on client side only
@@ -42,17 +35,18 @@ const SummaryDashboard = ({ data, locationMap }) => {
     }
   }, []);
 
-  if (!data || !data.details) {
+  if (!data || !data.facility) {
     return <p>No summary data available.</p>;
   }
 
-  const locations = Object.keys(data.details);
+  const locations = Object.keys(data.facility);
   const types = ['kango', 'kaigo', 'yuryo'];
   const titleMap = { kaigo: '介護', kango: '看護', yuryo: '有料' };
 
   // Calculate totals for each location and type
   const summaryData = locations.map((location) => {
-    const locationData = data.details[location];
+    const locationData = data.facility[location];
+    const bedCount = locationData?.beds || 0;
     const summary = {
       location,
       types: {},
@@ -62,25 +56,35 @@ const SummaryDashboard = ({ data, locationMap }) => {
     types.forEach((type) => {
       if (locationData[type] && locationData[type].staffs) {
         const staffs = locationData[type].staffs;
-        const totalRatio = staffs.reduce(
-          (acc, { equivalent_ratio: r }) => acc + r,
-          0
-        );
         const workingHours = staffs.reduce(
           (acc, { working_hours: w }) => acc + w,
           0
         );
+        // Calculate totalRatio as sum of working_hours divided by basicHours
+        const totalRatio = basicHours > 0 ? workingHours / basicHours : 0;
         const fullTime = staffs.filter(
           ({ employment_type }) => employment_type === '正社員'
         ).length;
         const partTime = staffs.filter(
           ({ employment_type }) => employment_type === 'パート'
         ).length;
+        const nightShift = staffs.filter(
+          ({ employment_type }) => employment_type === '宿直'
+        ).length;
+        const cooking = staffs.filter(
+          ({ employment_type }) => employment_type === '調理'
+        ).length;
+        const cleaning = staffs.filter(
+          ({ employment_type }) => employment_type === '清掃'
+        ).length;
 
         summary.types[type] = {
           total: staffs.length,
           fullTime,
           partTime,
+          nightShift,
+          cooking,
+          cleaning,
           workingHours,
           totalRatio,
         };
@@ -95,8 +99,9 @@ const SummaryDashboard = ({ data, locationMap }) => {
       <h2 className='text-2xl font-bold mb-4'>全体一覧</h2>
 
       {/* Summary cards for each type across all locations */}
-      <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 xxl:grid-cols-5 gap-4 mb-8'>
+      <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-4 xxl:grid-cols-5 gap-4 mb-8'>
         {summaryData.map((locData) => {
+          const bedCount = data.facility[locData.location]?.beds || 0;
           // Get totalRatio for all three types
           const totalRatios = types.map((t) => {
             const td = locData.types[t];
@@ -107,9 +112,7 @@ const SummaryDashboard = ({ data, locationMap }) => {
           // Calculate total and bed ratio
           const totalRatio = totalRatios.reduce((sum, val) => sum + val, 0);
           const labels = [...types.map((t) => titleMap[t]), '空き'];
-          const bedCount = beds[locData.location] || 0;
-          const remainingCount =
-            bedCount - totalRatios.reduce((sum, val) => sum + val, 0);
+          const remainingCount = bedCount - totalRatio;
           const bedRatio = bedCount > 0 ? totalRatio / bedCount : 0;
 
           return (
@@ -121,8 +124,14 @@ const SummaryDashboard = ({ data, locationMap }) => {
                 <h3 className='text-xl font-bold text-gray-700'>
                   {locationMap?.[locData.location] || locData.location}
                 </h3>
-                <div className='border-1 border-solid border-gray-200 px-2 py-1'>
-                  <span className='text-sm text-gray-500 mr-2'>床数</span>
+                <div className='border-1 border-solid border-gray-200 px-2 py-1 flex items-center'>
+                  <Image
+                    src='/hospital-bed.png'
+                    alt='床数'
+                    width={24}
+                    height={24}
+                    className='mr-2'
+                  />
                   <span className='text-lg font-semibold'>{bedCount}</span>
                 </div>
               </div>
@@ -258,6 +267,15 @@ const SummaryDashboard = ({ data, locationMap }) => {
                         パート
                       </th>
                       <th className='text-center py-1 text-gray-600 font-medium'>
+                        宿直
+                      </th>
+                      <th className='text-center py-1 text-gray-600 font-medium'>
+                        調理
+                      </th>
+                      <th className='text-center py-1 text-gray-600 font-medium'>
+                        清掃
+                      </th>
+                      <th className='text-center py-1 text-gray-600 font-medium'>
                         合計
                       </th>
                     </tr>
@@ -266,19 +284,35 @@ const SummaryDashboard = ({ data, locationMap }) => {
                     {types.map((type) => {
                       const typeData = locData.types[type];
                       if (!typeData) return null;
+                      const total =
+                        typeData.fullTime +
+                        typeData.partTime +
+                        typeData.nightShift +
+                        typeData.cooking +
+                        typeData.cleaning;
+
                       return (
                         <tr key={type} className='border-b border-gray-100'>
                           <td className='py-1 text-gray-700 font-medium'>
                             {titleMap[type]}
                           </td>
                           <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {typeData.fullTime}
+                            {formatValue(typeData.fullTime)}
                           </td>
                           <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {typeData.partTime}
+                            {formatValue(typeData.partTime)}
                           </td>
                           <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {typeData.fullTime + typeData.partTime}
+                            {formatValue(typeData.nightShift)}
+                          </td>
+                          <td className='py-1 text-center text-gray-700 font-semibold'>
+                            {formatValue(typeData.cooking)}
+                          </td>
+                          <td className='py-1 text-center text-gray-700 font-semibold'>
+                            {formatValue(typeData.cleaning)}
+                          </td>
+                          <td className='py-1 text-center text-gray-700 font-semibold'>
+                            {formatValue(total)}
                           </td>
                         </tr>
                       );
