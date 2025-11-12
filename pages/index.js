@@ -1,5 +1,6 @@
 import Head from 'next/head';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { parse, differenceInDays, getDaysInMonth, format } from 'date-fns';
 
 import Footer from '@components/Footer';
 import CSVSelect from '@components/CSVSelect';
@@ -29,7 +30,6 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState('');
   const [location, setLocation] = useState('');
   const [selectedFileId, setSelectedFileId] = useState('');
-  const [reportDate, setReportDate] = useState(new Date(2025, 8, 1));
 
   const handleFileSelect = async (fileId, fileName) => {
     if (!fileId) return;
@@ -57,6 +57,55 @@ export default function Home() {
     }
   };
 
+  // Calculate basic hours from workingHoursData based on period
+  const hoursForMonth = useMemo(() => {
+    if (!apiData?.workingHoursData || !apiData?.period_start) {
+      return undefined;
+    }
+    try {
+      const periodStart = parse(apiData.period_start, 'yyyy/MM/dd', new Date());
+      if (isNaN(periodStart.getTime())) return undefined;
+      const monthKey = format(periodStart, 'yyyyMM');
+      return apiData.workingHoursData[monthKey];
+    } catch (error) {
+      return undefined;
+    }
+  }, [apiData]);
+
+  const calculatedBasicHours = useMemo(() => {
+    if (
+      !apiData?.workingHoursData ||
+      !apiData?.period_start ||
+      !apiData?.period_end
+    ) {
+      return apiData?.basic_hours || 0;
+    }
+
+    try {
+      // Parse period dates - try multiple formats
+      const periodStart = parse(apiData.period_start, 'yyyy/MM/dd', new Date());
+      const periodEnd = parse(apiData.period_end, 'yyyy/MM/dd', new Date());
+
+      if (isNaN(periodStart.getTime()) || isNaN(periodEnd.getTime())) {
+        return apiData.basic_hours || 0;
+      }
+
+      // Calculate days in period (inclusive, so add 1)
+      const daysInPeriod = differenceInDays(periodEnd, periodStart) + 1;
+
+      // Get number of days in the month
+      const daysInMonth = getDaysInMonth(periodStart);
+
+      // Calculate: (hours / days_in_month) * days_in_period
+      const calculatedHours = (hoursForMonth / daysInMonth) * daysInPeriod;
+
+      return calculatedHours;
+    } catch (error) {
+      console.error('Error calculating basic hours:', error);
+      return apiData.basic_hours || 0;
+    }
+  }, [apiData]);
+
   return (
     <div className='container mx-auto max-w-screen px-8'>
       <Head>
@@ -75,7 +124,8 @@ export default function Home() {
             <div className='mb-4 flex gap-4'>
               <Card
                 label='基準労働時間'
-                value={apiData.basic_hours}
+                value={calculatedBasicHours.toFixed(2)}
+                subValue={`${hoursForMonth.toFixed(2)} (月単位)`}
                 className='w-96'
               />
               <Card
@@ -130,12 +180,16 @@ export default function Home() {
           {!isLoading && !errorMessage && apiData && (
             <>
               {location === 'summary' ? (
-                <SummaryDashboard data={apiData} locationMap={LOC_MAP} />
+                <SummaryDashboard
+                  data={apiData}
+                  locationMap={LOC_MAP}
+                  basicHours={calculatedBasicHours}
+                />
               ) : location && LOC_MAP[location] ? (
                 <DataTables
                   data={apiData}
                   location={location}
-                  reportDate={reportDate}
+                  basicHours={calculatedBasicHours}
                 />
               ) : null}
             </>
