@@ -17,7 +17,7 @@ const Card = ({ label, value, subValue, className }) => {
   return (
     <div className={baseClasses.join(' ')}>
       <div className='text-sm text-gray-500'>{label}</div>
-      <div className='text-2xl font-bold'>{value}</div>
+      <div className='text-2xl font-bold'>{displayValue}</div>
       {subValue && <div className='text-sm text-gray-500'>{subValue}</div>}
     </div>
   );

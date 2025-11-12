@@ -1,8 +1,8 @@
 @import "tailwindcss";
 @theme {
-  --color-kaigo: rgba(54, 162, 235, 1);
-  --color-kango: rgba(250, 224, 132, 1);
-  --color-yuryo: rgba(186, 235, 157, 1);
+  --color-kaigo: rgba(250, 224, 132, 0.3);
+  --color-kango: rgba(54, 162, 235, 0.3);
+  --color-yuryo: rgba(186, 235, 157, 0.3);
 }
 
 html,
