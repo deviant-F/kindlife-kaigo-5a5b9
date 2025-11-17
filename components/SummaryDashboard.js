@@ -111,6 +111,18 @@ const SummaryDashboard = ({ data, locationMap, basicHours }) => {
         ? (totalWorkingEquivalent / bedcount) * 100
         : null;
 
+    // Calculate sum of 看護 and 介護 percentages
+    const kangoKaigoSum =
+      (typeData.kango?.percentage || 0) + (typeData.kaigo?.percentage || 0);
+    const kangoKaigoSumPercentage = kangoKaigoSum > 0 ? kangoKaigoSum : null;
+
+    // Calculate sum of all three types percentages
+    const allTypesSum =
+      (typeData.kango?.percentage || 0) +
+      (typeData.kaigo?.percentage || 0) +
+      (typeData.yuryo?.percentage || 0);
+    const allTypesSumPercentage = allTypesSum > 0 ? allTypesSum : null;
+
     return {
       locationKey,
       locationName: locationMap[locationKey] || locationKey,
@@ -118,6 +130,8 @@ const SummaryDashboard = ({ data, locationMap, basicHours }) => {
       typeData,
       totalWorkingEquivalent,
       workingEquivalentPercentage,
+      kangoKaigoSumPercentage,
+      allTypesSumPercentage,
     };
   });
 
@@ -133,7 +147,7 @@ const SummaryDashboard = ({ data, locationMap, basicHours }) => {
       {
         accessorKey: 'bedcount',
         header: '床数',
-        size: 80,
+        size: 40,
         align: 'center',
         cell: ({ getValue }) => formatValue(getValue()),
       },
@@ -145,46 +159,23 @@ const SummaryDashboard = ({ data, locationMap, basicHours }) => {
         {
           accessorKey: `typeData.${type}.count`,
           header: '人数',
-          size: 80,
+          size: 40,
           align: 'center',
           cell: ({ getValue }) => formatValue(getValue()),
         },
         {
           accessorKey: `typeData.${type}.fullTime`,
           header: '正社員',
-          size: 80,
+          size: 40,
           align: 'center',
           cell: ({ getValue }) => formatValue(getValue()),
         },
         {
           accessorKey: `typeData.${type}.partTime`,
           header: 'パート',
-          size: 80,
+          size: 40,
           align: 'center',
           cell: ({ getValue }) => formatValue(getValue()),
-        },
-        {
-          accessorKey: `typeData.${type}.workingEquivalent`,
-          header: '常勤換算',
-          size: 100,
-          align: 'center',
-          cell: ({ getValue }) => {
-            const value = getValue();
-            return value > 0 ? value.toFixed(2) : formatValue(0);
-          },
-        },
-        {
-          accessorKey: `typeData.${type}.percentage`,
-          header: '常勤/床数 (%)',
-          size: 120,
-          align: 'center',
-          cell: ({ getValue }) => {
-            const value = getValue();
-            if (value === null || value === undefined) {
-              return formatValue(null);
-            }
-            return `${Math.round(value)}%`;
-          },
         },
       ];
 
@@ -194,26 +185,52 @@ const SummaryDashboard = ({ data, locationMap, basicHours }) => {
           {
             accessorKey: 'typeData.yuryo.nightShift',
             header: '宿直',
-            size: 80,
+            size: 40,
             align: 'center',
             cell: ({ getValue }) => formatValue(getValue()),
           },
           {
             accessorKey: 'typeData.yuryo.culinary',
             header: '調理',
-            size: 80,
+            size: 40,
             align: 'center',
             cell: ({ getValue }) => formatValue(getValue()),
           },
           {
             accessorKey: 'typeData.yuryo.cleaning',
             header: '清掃',
-            size: 80,
+            size: 40,
             align: 'center',
             cell: ({ getValue }) => formatValue(getValue()),
           }
         );
       }
+
+      typeColumns.push(
+        {
+          accessorKey: `typeData.${type}.workingEquivalent`,
+          header: '常勤換算',
+          size: 60,
+          align: 'center',
+          cell: ({ getValue }) => {
+            const value = getValue();
+            return value > 0 ? value.toFixed(2) : formatValue(0);
+          },
+        },
+        {
+          accessorKey: `typeData.${type}.percentage`,
+          header: '常勤(%)',
+          size: 40,
+          align: 'center',
+          cell: ({ getValue }) => {
+            const value = getValue();
+            if (value === null || value === undefined) {
+              return formatValue(null);
+            }
+            return `${Math.round(value)}%`;
+          },
+        }
+      );
 
       // Create column group with parent header
       cols.push({
@@ -222,19 +239,53 @@ const SummaryDashboard = ({ data, locationMap, basicHours }) => {
       });
     });
 
-    // Add percentage column: 常勤換算/床数
-    cols.push({
-      accessorKey: 'workingEquivalentPercentage',
-      header: '常勤換算/床数 (%)',
-      size: 120,
-      align: 'center',
-      cell: ({ getValue }) => {
-        const value = getValue();
-        if (value === null || value === undefined) {
-          return formatValue(null);
-        }
-        return `${Math.round(value)}%`;
+    // Add sum columns grouped under parent header "常勤(%)"
+    const sumColumns = [
+      {
+        accessorKey: 'kangoKaigoSumPercentage',
+        header: '看護+介護',
+        size: 100,
+        align: 'center',
+        cell: ({ getValue }) => {
+          const value = getValue();
+          if (value === null || value === undefined) {
+            return formatValue(null);
+          }
+          return `${Math.round(value)}%`;
+        },
       },
+      {
+        accessorKey: 'allTypesSumPercentage',
+        header: '看護+介護+有料',
+        size: 100,
+        align: 'center',
+        cell: ({ getValue }) => {
+          const value = getValue();
+          if (value === null || value === undefined) {
+            return formatValue(null);
+          }
+          return `${Math.round(value)}%`;
+        },
+      },
+      {
+        accessorKey: 'workingEquivalentPercentage',
+        header: '総合',
+        size: 70,
+        align: 'center',
+        cell: ({ getValue }) => {
+          const value = getValue();
+          if (value === null || value === undefined) {
+            return formatValue(null);
+          }
+          return `${Math.round(value)}%`;
+        },
+      },
+    ];
+
+    // Create column group with parent header "常勤(%)"
+    cols.push({
+      header: '常勤総合',
+      columns: sumColumns,
     });
 
     return cols;
