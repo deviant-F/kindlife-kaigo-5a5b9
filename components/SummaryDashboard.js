@@ -1,18 +1,11 @@
-import { useEffect, useState } from 'react';
-import dynamic from 'next/dynamic';
-import Image from 'next/image';
-
-// Dynamically import Chart.js components with SSR disabled
-const Doughnut = dynamic(
-  () => import('react-chartjs-2').then((mod) => mod.Doughnut),
-  {
-    ssr: false,
-  }
-);
+import React, { useMemo } from 'react';
+import {
+  useReactTable,
+  getCoreRowModel,
+  flexRender,
+} from '@tanstack/react-table';
 
 const SummaryDashboard = ({ data, locationMap, basicHours }) => {
-  const [isChartReady, setIsChartReady] = useState(false);
-
   // Helper function to format value: show "-" in grey if 0, otherwise show the value
   const formatValue = (value) => {
     if (value === 0 || value === null || value === undefined) {
@@ -20,20 +13,6 @@ const SummaryDashboard = ({ data, locationMap, basicHours }) => {
     }
     return value;
   };
-
-  useEffect(() => {
-    // Register Chart.js components on client side only
-    if (typeof window !== 'undefined') {
-      import('chart.js').then((ChartJS) => {
-        ChartJS.Chart.register(
-          ChartJS.ArcElement,
-          ChartJS.Tooltip,
-          ChartJS.Legend
-        );
-        setIsChartReady(true);
-      });
-    }
-  }, []);
 
   if (!data || !data.facility) {
     return <p>No summary data available.</p>;
@@ -43,286 +22,342 @@ const SummaryDashboard = ({ data, locationMap, basicHours }) => {
   const types = ['kango', 'kaigo', 'yuryo'];
   const titleMap = { kaigo: '介護', kango: '看護', yuryo: '有料' };
 
-  // Calculate totals for each location and type
-  const summaryData = locations.map((location) => {
-    const locationData = data.facility[location];
-    const bedCount = locationData?.beds || 0;
-    const summary = {
-      location,
-      types: {},
-      bedRatio: 0,
-    };
+  // Calculate aggregated data for each location
+  const locationData = locations.map((locationKey) => {
+    const locationFacility = data.facility[locationKey] || {};
+    let totalWorkingHours = 0;
+    const typeData = {};
 
     types.forEach((type) => {
-      if (locationData[type] && locationData[type].staffs) {
-        const staffs = locationData[type].staffs;
-        const workingHours = staffs.reduce(
-          (acc, { working_hours: w }) => acc + w,
-          0
-        );
-        // Calculate totalRatio as sum of working_hours divided by basicHours
-        const totalRatio = basicHours > 0 ? workingHours / basicHours : 0;
+      const typeFacility = locationFacility[type];
+      if (typeFacility && typeFacility.staffs) {
+        const staffs = typeFacility.staffs;
         const fullTime = staffs.filter(
           ({ employment_type }) => employment_type === '正社員'
         ).length;
         const partTime = staffs.filter(
           ({ employment_type }) => employment_type === 'パート'
         ).length;
-        const nightShift = staffs.filter(
-          ({ employment_type }) => employment_type === '宿直'
-        ).length;
-        const cooking = staffs.filter(
-          ({ employment_type }) => employment_type === '調理'
-        ).length;
-        const cleaning = staffs.filter(
-          ({ employment_type }) => employment_type === '清掃'
-        ).length;
+        const workingHours = staffs.reduce(
+          (acc, { working_hours: w }) => acc + (w || 0),
+          0
+        );
+        const workingEquivalent =
+          basicHours > 0 ? workingHours / basicHours : 0;
 
-        summary.types[type] = {
-          total: staffs.length,
+        totalWorkingHours += workingHours;
+
+        // For yuryo type, calculate additional categories
+        let nightShift = 0;
+        let culinary = 0;
+        let cleaning = 0;
+
+        if (type === 'yuryo') {
+          nightShift = staffs.filter(
+            ({ employment_type }) => employment_type === '宿直'
+          ).length;
+          culinary = staffs.filter(
+            ({ employment_type }) => employment_type === '調理'
+          ).length;
+          cleaning = staffs.filter(
+            ({ employment_type }) => employment_type === '清掃'
+          ).length;
+        }
+
+        typeData[type] = {
+          count: staffs.length,
           fullTime,
           partTime,
-          nightShift,
-          cooking,
-          cleaning,
           workingHours,
-          totalRatio,
+          workingEquivalent,
+          nightShift,
+          culinary,
+          cleaning,
+        };
+      } else {
+        typeData[type] = {
+          count: 0,
+          fullTime: 0,
+          partTime: 0,
+          workingHours: 0,
+          workingEquivalent: 0,
+          nightShift: 0,
+          culinary: 0,
+          cleaning: 0,
+          percentage: null,
         };
       }
     });
 
-    return summary;
+    const totalWorkingEquivalent =
+      basicHours > 0 ? totalWorkingHours / basicHours : 0;
+
+    // Get bedcount if available (check various possible locations)
+    const bedcount = locationFacility.beds || null;
+
+    // Calculate percentage for each type: (type_workingEquivalent / 床数) * 100
+    types.forEach((type) => {
+      const typeWorkingEquivalent = typeData[type]?.workingEquivalent || 0;
+      const typePercentage =
+        bedcount && bedcount > 0 && typeWorkingEquivalent > 0
+          ? (typeWorkingEquivalent / bedcount) * 100
+          : null;
+      typeData[type].percentage = typePercentage;
+    });
+
+    // Calculate total percentage: (常勤換算 / 床数) * 100
+    const workingEquivalentPercentage =
+      bedcount && bedcount > 0 && totalWorkingEquivalent > 0
+        ? (totalWorkingEquivalent / bedcount) * 100
+        : null;
+
+    return {
+      locationKey,
+      locationName: locationMap[locationKey] || locationKey,
+      bedcount,
+      typeData,
+      totalWorkingEquivalent,
+      workingEquivalentPercentage,
+    };
+  });
+
+  // Define columns using TanStack Table with column groups
+  const columns = useMemo(() => {
+    const cols = [
+      {
+        accessorKey: 'locationName',
+        header: '施設名',
+        size: 120,
+        align: 'left',
+      },
+      {
+        accessorKey: 'bedcount',
+        header: '床数',
+        size: 80,
+        align: 'center',
+        cell: ({ getValue }) => formatValue(getValue()),
+      },
+    ];
+
+    // Add column groups for each type
+    types.forEach((type) => {
+      const typeColumns = [
+        {
+          accessorKey: `typeData.${type}.count`,
+          header: '人数',
+          size: 80,
+          align: 'center',
+          cell: ({ getValue }) => formatValue(getValue()),
+        },
+        {
+          accessorKey: `typeData.${type}.fullTime`,
+          header: '正社員',
+          size: 80,
+          align: 'center',
+          cell: ({ getValue }) => formatValue(getValue()),
+        },
+        {
+          accessorKey: `typeData.${type}.partTime`,
+          header: 'パート',
+          size: 80,
+          align: 'center',
+          cell: ({ getValue }) => formatValue(getValue()),
+        },
+        {
+          accessorKey: `typeData.${type}.workingEquivalent`,
+          header: '常勤換算',
+          size: 100,
+          align: 'center',
+          cell: ({ getValue }) => {
+            const value = getValue();
+            return value > 0 ? value.toFixed(2) : formatValue(0);
+          },
+        },
+        {
+          accessorKey: `typeData.${type}.percentage`,
+          header: '常勤/床数 (%)',
+          size: 120,
+          align: 'center',
+          cell: ({ getValue }) => {
+            const value = getValue();
+            if (value === null || value === undefined) {
+              return formatValue(null);
+            }
+            return `${Math.round(value)}%`;
+          },
+        },
+      ];
+
+      // Add additional columns for yuryo type
+      if (type === 'yuryo') {
+        typeColumns.push(
+          {
+            accessorKey: 'typeData.yuryo.nightShift',
+            header: '宿直',
+            size: 80,
+            align: 'center',
+            cell: ({ getValue }) => formatValue(getValue()),
+          },
+          {
+            accessorKey: 'typeData.yuryo.culinary',
+            header: '調理',
+            size: 80,
+            align: 'center',
+            cell: ({ getValue }) => formatValue(getValue()),
+          },
+          {
+            accessorKey: 'typeData.yuryo.cleaning',
+            header: '清掃',
+            size: 80,
+            align: 'center',
+            cell: ({ getValue }) => formatValue(getValue()),
+          }
+        );
+      }
+
+      // Create column group with parent header
+      cols.push({
+        header: titleMap[type],
+        columns: typeColumns,
+      });
+    });
+
+    // Add percentage column: 常勤換算/床数
+    cols.push({
+      accessorKey: 'workingEquivalentPercentage',
+      header: '常勤換算/床数 (%)',
+      size: 120,
+      align: 'center',
+      cell: ({ getValue }) => {
+        const value = getValue();
+        if (value === null || value === undefined) {
+          return formatValue(null);
+        }
+        return `${Math.round(value)}%`;
+      },
+    });
+
+    return cols;
+  }, [titleMap, types]);
+
+  const table = useReactTable({
+    data: locationData,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
   });
 
   return (
     <div className=''>
       <h2 className='text-2xl font-bold mb-4'>全体一覧</h2>
+      <div className='overflow-x-auto'>
+        <table className='min-w-full bg-white border border-gray-200'>
+          <thead>
+            {table.getHeaderGroups().map((headerGroup, groupIndex) => {
+              const isFirstRow = groupIndex === 0;
+              const totalHeaderRows = table.getHeaderGroups().length;
 
-      {/* Summary cards for each type across all locations */}
-      <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-4 xxl:grid-cols-5 gap-4 mb-8'>
-        {summaryData.map((locData) => {
-          const bedCount = data.facility[locData.location]?.beds || 0;
-          // Get totalRatio for all three types
-          const totalRatios = types.map((t) => {
-            const td = locData.types[t];
-            if (!td) return 0;
-            return td.totalRatio;
-          });
+              return (
+                <tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => {
+                    // Skip rendering if this is a child header in the first row
+                    // (it will be rendered as part of parent's subHeaders)
+                    if (isFirstRow && header.column.parent) {
+                      return null;
+                    }
 
-          // Calculate total and bed ratio
-          const totalRatio = totalRatios.reduce((sum, val) => sum + val, 0);
-          const labels = [...types.map((t) => titleMap[t]), '空き'];
-          const remainingCount = bedCount - totalRatio;
-          const bedRatio = bedCount > 0 ? totalRatio / bedCount : 0;
-
-          return (
-            <div
-              key={locData.location}
-              className='bg-white border border-gray-200 rounded-lg p-4'
-            >
-              <div className='flex justify-between items-center'>
-                <h3 className='text-xl font-bold text-gray-700'>
-                  {locationMap?.[locData.location] || locData.location}
-                </h3>
-                <div className='border-1 border-solid border-gray-200 px-2 py-1 flex items-center'>
-                  <Image
-                    src='/hospital-bed.png'
-                    alt='床数'
-                    width={24}
-                    height={24}
-                    className='mr-2'
-                  />
-                  <span className='text-lg font-semibold'>{bedCount}</span>
-                </div>
-              </div>
-              {isChartReady && (
-                <Doughnut
-                  className='lg:max-h-[280px] xl:max-xl-[320px]'
-                  data={{
-                    labels,
-                    datasets: [
+                    const column = header.column.columnDef;
+                    const alignClass =
                       {
-                        data: [...totalRatios, remainingCount],
-                        backgroundColor: [
-                          'rgba(54, 162, 235, 0.8)',
-                          'rgba(250, 224, 132, 0.8)',
-                          'rgba(186, 235, 157, 0.8)',
-                          'rgba(237, 237, 237, 0.8)',
-                        ],
-                        borderColor: [
-                          'rgba(54, 162, 235, 1)',
-                          'rgba(250, 224, 132, 1)',
-                          'rgba(186, 235, 157, 1)',
-                          'rgba(237, 237, 237, 1)',
-                        ],
-                        borderWidth: 1,
-                        cutout: '70%',
-                        hoverOffset: 10,
-                      },
-                    ],
-                  }}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    layout: {
-                      padding: {
-                        top: 10,
-                        bottom: 10,
-                      },
-                    },
-                    plugins: {
-                      legend: {
-                        position: 'bottom',
-                        labels: {
-                          boxWidth: 12,
-                          padding: 20,
-                          font: {
-                            size: 14,
-                          },
-                        },
-                      },
-                      tooltip: {
-                        enabled: true,
-                        callbacks: {
-                          label: function (context) {
-                            const value = context.parsed || 0;
-                            // Calculate percentage relative to bed count
-                            const percentage =
-                              bedCount > 0
-                                ? ((value / bedCount) * 100).toFixed(1)
-                                : 0;
-                            return `常勤換算: ${value.toFixed(
-                              2
-                            )} (${percentage}%)`;
-                          },
-                        },
-                      },
-                      // Custom plugin to display text in center
-                      centerText: {
-                        display: true,
-                        text: `ベッド比\n${parseInt(bedRatio * 100)}%`,
-                      },
-                    },
-                  }}
-                  plugins={[
-                    {
-                      id: 'centerText',
-                      afterDraw: function (chart) {
-                        const ctx = chart.ctx;
-                        const chartArea = chart.chartArea;
-                        const centerX = (chartArea.left + chartArea.right) / 2;
-                        const centerY = (chartArea.top + chartArea.bottom) / 2;
+                        left: 'text-left',
+                        center: 'text-center',
+                        right: 'text-right',
+                      }[column.align || 'left'] || 'text-left';
 
-                        // Get the text and options from plugin options
-                        const pluginOptions = chart.options.plugins?.centerText;
-                        if (!pluginOptions || !pluginOptions.display) {
-                          return;
-                        }
+                    // Calculate colspan for parent headers (column groups)
+                    const colSpan = header.subHeaders?.length || 1;
+                    // Calculate rowSpan for regular columns (no subHeaders) in first row
+                    const rowSpan =
+                      isFirstRow && !header.subHeaders?.length
+                        ? totalHeaderRows
+                        : 1;
+                    // Parent headers are in the first row and have subHeaders
+                    const isParentHeader =
+                      isFirstRow && header.subHeaders?.length > 0;
 
-                        const text = pluginOptions.text || '';
-                        const lines = text.split('\n');
+                    // Determine theme color for parent headers
+                    let headerStyle = { width: column.size };
+                    let headerClassName = `border border-gray-200 px-3 py-2 ${alignClass} text-gray-700 font-medium`;
 
-                        // Calculate vertical spacing
-                        const lineHeight = 36;
-                        const totalHeight = lines.length * lineHeight;
-                        const startY =
-                          centerY - totalHeight / 2 + lineHeight / 2;
-
-                        lines.forEach((line, index) => {
-                          // Save context for each line
-                          ctx.save();
-
-                          // First line (ベッド比) uses 16px, second line (percentage) uses 20px
-                          const fontSize = index === 0 ? '16' : '36';
-
-                          // Set font properties explicitly - ensure font size is a string
-                          ctx.font = fontSize + 'px Arial';
-                          ctx.textAlign = 'center';
-                          ctx.textBaseline = 'middle';
-                          ctx.fillStyle = '#333';
-
-                          const y = startY + index * lineHeight;
-                          ctx.fillText(line, centerX, y);
-
-                          // Restore context after each line
-                          ctx.restore();
-                        });
-                      },
-                    },
-                  ]}
-                  width={120}
-                  height={120}
-                />
-              )}
-              {/* Staff counts by type */}
-              <div className='mt-4'>
-                <table className='w-full text-sm'>
-                  <thead>
-                    <tr className='border-b border-gray-200'>
-                      <th className='text-left py-1 text-gray-600 font-medium'></th>
-                      <th className='text-center py-1 text-gray-600 font-medium'>
-                        正社員
-                      </th>
-                      <th className='text-center py-1 text-gray-600 font-medium'>
-                        パート
-                      </th>
-                      <th className='text-center py-1 text-gray-600 font-medium'>
-                        宿直
-                      </th>
-                      <th className='text-center py-1 text-gray-600 font-medium'>
-                        調理
-                      </th>
-                      <th className='text-center py-1 text-gray-600 font-medium'>
-                        清掃
-                      </th>
-                      <th className='text-center py-1 text-gray-600 font-medium'>
-                        合計
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {types.map((type) => {
-                      const typeData = locData.types[type];
-                      if (!typeData) return null;
-                      const total =
-                        typeData.fullTime +
-                        typeData.partTime +
-                        typeData.nightShift +
-                        typeData.cooking +
-                        typeData.cleaning;
-
-                      return (
-                        <tr key={type} className='border-b border-gray-100'>
-                          <td className='py-1 text-gray-700 font-medium'>
-                            {titleMap[type]}
-                          </td>
-                          <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {formatValue(typeData.fullTime)}
-                          </td>
-                          <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {formatValue(typeData.partTime)}
-                          </td>
-                          <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {formatValue(typeData.nightShift)}
-                          </td>
-                          <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {formatValue(typeData.cooking)}
-                          </td>
-                          <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {formatValue(typeData.cleaning)}
-                          </td>
-                          <td className='py-1 text-center text-gray-700 font-semibold'>
-                            {formatValue(total)}
-                          </td>
-                        </tr>
+                    if (isParentHeader) {
+                      // Get the header text to determine the type
+                      const headerText = column.header;
+                      // Find which type this header belongs to
+                      const typeKey = Object.keys(titleMap).find(
+                        (key) => titleMap[key] === headerText
                       );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          );
-        })}
+                      if (typeKey) {
+                        // Apply CSS variable color
+                        headerStyle.backgroundColor = `var(--color-${typeKey})`;
+                        headerClassName += ' font-semibold';
+                      } else {
+                        headerClassName += ' bg-gray-100';
+                      }
+                    } else {
+                      headerClassName += ' bg-gray-50';
+                    }
+
+                    return (
+                      <th
+                        key={header.id}
+                        colSpan={colSpan}
+                        rowSpan={rowSpan}
+                        className={headerClassName}
+                        style={headerStyle}
+                      >
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext()
+                            )}
+                      </th>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </thead>
+          <tbody>
+            {table.getRowModel().rows.map((row, idx) => (
+              <tr
+                key={row.id}
+                className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
+              >
+                {row.getVisibleCells().map((cell) => {
+                  const column = cell.column.columnDef;
+                  const alignClass =
+                    {
+                      left: 'text-left',
+                      center: 'text-center',
+                      right: 'text-right',
+                    }[column.align || 'left'] || 'text-left';
+
+                  return (
+                    <td
+                      key={cell.id}
+                      className={`border border-gray-200 px-3 py-2 ${alignClass}`}
+                    >
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext()
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
