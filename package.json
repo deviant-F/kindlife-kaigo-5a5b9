@@ -6,10 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "export": "next build && next export"
+    "export": "next build"
   },
   "dependencies": {
-    "@netlify/plugin-nextjs": "^5.13.5",
+    "@tanstack/react-table": "^8.21.3",
     "chart.js": "^4.5.1",
     "date-fns": "^4.1.0",
     "next": "^15.0.0",
